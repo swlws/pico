@@ -30,10 +30,14 @@ const getBackgroundColor = (
 }
 
 export const createTree = (windowInfo: WindowInfo) => {
+	// const {
+	// 	innerWidth: width,
+	// 	innerHeight: height
+	// } = windowInfo.window
 	const {
-		innerWidth: width,
-		innerHeight: height
-	} = windowInfo.window
+		scrollWidth: width,
+		scrollHeight: height
+	} = windowInfo.document.body
 
 	const h = createElement(windowInfo.document)
 	const s = createSVGElement(windowInfo.document)

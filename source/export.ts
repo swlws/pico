@@ -66,18 +66,19 @@ const canvasToPngDataURL = (
 export const containerToCanvas = (
 	container: Container
 ): Fluture<DetailedError, HTMLCanvasElement> => {
+	const {
+		scrollWidth: width,
+		scrollHeight: height
+	} = container.parentWindow.window.document.body
+
 	const scalingRatio =
 		container.parentWindow.window.devicePixelRatio || 1
 
 	const $canvas = createElement(
 		container.parentWindow.document
 	)('canvas', {
-		width:
-			container.parentWindow.window.innerWidth *
-			scalingRatio,
-		height:
-			container.parentWindow.window.innerHeight *
-			scalingRatio
+		width: width * scalingRatio,
+		height: height * scalingRatio
 	})
 
 	const ctx = $canvas.getContext('2d')

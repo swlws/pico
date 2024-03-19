@@ -42,18 +42,59 @@ const getScrolledElements = (
 		)
 		.filter(isHTMLElement)
 
-const attachCloneID = ($target: HTMLElement) => {
+function isWebComponent(element: HTMLElement) {
+    return customElements.get(element.tagName.toLowerCase()) !== undefined;
+}
+
+function findAllWebComponents(
+	$target: HTMLElement
+){
+	const ids: string[] = [];
+
+	const childrenArray = Array.from($target.children) as HTMLElement[];
+	for (const $element of childrenArray) {
+		if (isWebComponent($element)) {
+			const cloneId = id()
+			$element.dataset[PICO_CLONE_ID_KEY] = cloneId;
+
+			ids.push(cloneId)
+		}else{
+			ids.push(...findAllWebComponents($element))
+		}
+	}
+
+	return ids
+}
+
+const attachCloneID = ($target: HTMLElement, webComponentIds: string[]) => {
 	for (const $element of [
 		...$target.querySelectorAll('input'),
 		...$target.querySelectorAll('textarea'),
 		...$target.querySelectorAll('canvas'),
-		...getScrolledElements($target)
+		...getScrolledElements($target),
 	]) {
 		$element.dataset[PICO_CLONE_ID_KEY] = id()
 	}
+
+	// attach clone id to web components
+	for(const webComponentId of webComponentIds){
+		const wc = $target.querySelector(`[data-${PICO_CLONE_ID_KEY}="${webComponentId}"]`)
+		let shadowRoot = wc?.shadowRoot
+		if (shadowRoot) {
+			const childrenArray = [
+				...shadowRoot.querySelectorAll('input'),
+				...shadowRoot.querySelectorAll('textarea'),
+				...shadowRoot.querySelectorAll('canvas'),
+			]
+			
+			for(const $element of childrenArray){
+				$element.dataset[PICO_CLONE_ID_KEY] = webComponentId + '__' + id()
+			}
+		}
+	}
 }
 
-const removeCloneID = ($target: HTMLElement) => {
+const removeCloneID = ($target: HTMLElement, webComponentIds: string[]) => {
 	for (const $element of $target.querySelectorAll(
 		`[data-${PICO_CLONE_ID_KEY}]`
 	)) {
@@ -67,6 +108,19 @@ const removeCloneID = ($target: HTMLElement) => {
 		}
 
 		$element.removeAttribute(`data-${PICO_CLONE_ID_KEY}`)
+	}
+
+	// remove clone id from web components
+	for(const webComponentId of webComponentIds){
+		const wc = $target.querySelector(`[data-${PICO_CLONE_ID_KEY}="${webComponentId}"]`)
+		let shadowRoot = wc?.shadowRoot
+		if (shadowRoot) {
+			for(const $element of shadowRoot.querySelectorAll(
+				`[data-${PICO_CLONE_ID_KEY}]`
+			)){
+				$element.removeAttribute(`data-${PICO_CLONE_ID_KEY}`)
+			}
+		}
 	}
 }
 
@@ -114,6 +168,10 @@ const cloneCanvases = (container: Container) => {
 			$originalCanvas
 		).cssText
 
+		// 修复 canvas 的宽高问题
+		$replacementImg.style.width = $originalCanvas.offsetWidth + 'px';
+        $replacementImg.style.height = $originalCanvas.offsetHeight + 'px';
+
 		$replacementImg.src = $originalCanvas.toDataURL()
 
 		const parent = $clonedCanvas.parentNode
@@ -135,7 +193,35 @@ const cloneCanvases = (container: Container) => {
 
 // Input values set by JS don't get copied when performing a recursive
 // `Node.cloneNode`, we need to set the attributes ourselves.
-const cloneInputs = (container: Container) => {
+const cloneInputs = (container: Container, webComponentIds: string[]) => {
+	// Input elements in web components
+	const $originalInputOrTextareaInWebComponents = webComponentIds.reduce(
+		(acc: (HTMLInputElement | HTMLTextAreaElement)[], webComponentId) => {
+			const wc = container.parentWindow.document.querySelector(`[data-${PICO_CLONE_ID_KEY}="${webComponentId}"]`)
+			let shadowRoot = wc?.shadowRoot
+			if (shadowRoot) {
+				const childrenArray = [
+					...shadowRoot.querySelectorAll('input'),
+					...shadowRoot.querySelectorAll('textarea'),
+				]
+				acc.push(...childrenArray)
+			}
+
+			return acc
+		}, []
+	)
+
+	// Input elements
+	const $allInputOrTextarea = [
+		...container.parentWindow.document.querySelectorAll(
+			'input'
+		),
+		...container.parentWindow.document.querySelectorAll(
+			'textarea'
+		),
+		...$originalInputOrTextareaInWebComponents
+	]
+
 	for (const $clonedInputOrTextarea of [
 		...container.tree.html.querySelectorAll('input'),
 		...container.tree.html.querySelectorAll('textarea')
@@ -152,14 +238,7 @@ const cloneInputs = (container: Container) => {
 			continue
 		}
 
-		const $originalInputOrTextarea = [
-			...container.parentWindow.document.querySelectorAll(
-				'input'
-			),
-			...container.parentWindow.document.querySelectorAll(
-				'textarea'
-			)
-		].find(
+		const $originalInputOrTextarea = $allInputOrTextarea.find(
 			$original =>
 				$original.dataset[PICO_CLONE_ID_KEY] === cloneId
 		)
@@ -386,16 +465,18 @@ const cloneScrolls = (container: Container) => {
 	return container
 }
 
-const removeNodesMatchingSelectors = (selectors: string[]) => (
+const removeNodesMatchingSelectors = (selectors: (string | (($node: Node) => void))[]) => (
 	$node: Node
 ) => {
 	if ($node instanceof Element) {
 		selectors.forEach(selector => {
-			for (const $child of $node.querySelectorAll(
-				selector
-			)) {
-				$child.remove()
-			}
+			if (typeof selector === 'string') {
+                $node.querySelectorAll(selector).forEach($child => $child.remove())
+            } else if (typeof selector === 'function') {
+                selector($node)
+            } else {
+                console.warn("warn::removeNodesMatchingSelectors, unknown selector type")
+            }
 		})
 	}
 }
@@ -404,7 +485,8 @@ const removeNodesMatchingSelectors = (selectors: string[]) => (
 export const cloneBody = (ignoredSelectors: string[]) => (
 	container: Container
 ): Container => {
-	attachCloneID(container.parentWindow.html)
+	const webComponentIds = findAllWebComponents(container.parentWindow.html)
+	attachCloneID(container.parentWindow.html, webComponentIds)
 
 	container.tree.html.className =
 		container.parentWindow.html.className
@@ -424,7 +506,7 @@ export const cloneBody = (ignoredSelectors: string[]) => (
 	removeNodesMatchingSelectors(ignoredSelectors)($clonedBody)
 
 	container.tree.html.appendChild($clonedBody)
-	cloneInputs(container)
+	cloneInputs(container, webComponentIds)
 	cloneCanvases(container)
 	cloneScrolls(container)
 
@@ -432,7 +514,7 @@ export const cloneBody = (ignoredSelectors: string[]) => (
 		container.tree.html.style.margin = '0'
 	}
 
-	removeCloneID(container.parentWindow.html)
+	removeCloneID(container.parentWindow.html, webComponentIds)
 
 	return container
 }
